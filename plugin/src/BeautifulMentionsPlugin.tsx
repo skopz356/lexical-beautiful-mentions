@@ -1,8 +1,14 @@
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import {
   LexicalTypeaheadMenuPlugin,
+  MenuResolution,
   MenuTextMatch,
 } from "@lexical/react/LexicalTypeaheadMenuPlugin";
+import {
+  LexicalMenu,
+  MenuRenderFn,
+  useMenuAnchorRef,
+} from "@lexical/react/shared/LexicalMenu";
 import { mergeRegister } from "@lexical/utils";
 import {
   $createTextNode,
@@ -62,9 +68,11 @@ import {
 } from "./mention-utils";
 import { useIsFocused } from "./useIsFocused";
 import { useMentionLookupService } from "./useMentionLookupService";
+import { LexicalNodeMenuPlugin } from "@lexical/react/LexicalNodeMenuPlugin";
 
 class MentionOption extends MenuOption {
   readonly menuItem: BeautifulMentionsMenuItem;
+
   constructor(
     public readonly trigger: string,
     value: string,
@@ -577,6 +585,72 @@ export function BeautifulMentionsPlugin(props: BeautifulMentionsPluginProps) {
     [insertSpaceIfNecessary, triggers, punctuation],
   );
 
+  const [nodeKey, setNodeKey] = useState<string | null>(null)
+
+  const menuRenderFn: MenuRenderFn<MenuOption> = (
+    anchorElementRef,
+    { selectedIndex, selectOptionAndCleanUp, setHighlightedIndex },
+  ) => {
+    selectedMenuIndexRef.current = selectedIndex;
+    if (
+      anchorElementRef.current &&
+      options.length === 0 &&
+      query &&
+      !loading &&
+      isEditorFocused &&
+      EmptyComponent
+    ) {
+      return ReactDOM.createPortal(
+        <EmptyComponent />,
+        anchorElementRef.current,
+      );
+    }
+    return anchorElementRef.current && open
+      ? ReactDOM.createPortal(
+          <MenuComponent
+            loading={loading}
+            role="menu"
+            aria-label="Choose a mention"
+            aria-hidden={!open}
+            aria-activedescendant={
+              !IS_MOBILE && selectedIndex !== null && !!options[selectedIndex]
+                ? options[selectedIndex].displayValue
+                : ""
+            }
+          >
+            {options.map((option, i) => (
+              <MenuItemComponent
+                key={option.key}
+                tabIndex={-1}
+                selected={!IS_MOBILE && selectedIndex === i}
+                ref={option.setRefElement}
+                role="menuitem"
+                aria-selected={!IS_MOBILE && selectedIndex === i}
+                aria-label={`Choose ${option.value}`}
+                item={option.menuItem}
+                itemValue={option.value}
+                label={option.displayValue}
+                {...option.data}
+                onClick={() => {
+                  setHighlightedIndex(i);
+                  selectOptionAndCleanUp(option);
+                }}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                }}
+                onMouseEnter={() => {
+                  setHighlightedIndex(i);
+                }}
+              >
+                {option.displayValue}
+              </MenuItemComponent>
+            ))}
+          </MenuComponent>,
+          anchorElementRef.current,
+        )
+      : null;
+  };
+
   useEffect(() => {
     if (!editor.hasNodes([BeautifulMentionNode])) {
       throw new Error(
@@ -584,6 +658,18 @@ export function BeautifulMentionsPlugin(props: BeautifulMentionsPluginProps) {
       );
     }
     return mergeRegister(
+        editor.registerCommand(
+            SELECTION_CHANGE_COMMAND,
+            () => {
+              const selection = $getSelection()?.getNodes();
+              if(selection && $isBeautifulMentionNode(selection[0])) {
+                setNodeKey(selection[0].getKey())
+              }
+
+              return false;
+            },
+            COMMAND_PRIORITY_NORMAL
+        ),
       editor.registerCommand(
         SELECTION_CHANGE_COMMAND,
         () => {
@@ -732,79 +818,18 @@ export function BeautifulMentionsPlugin(props: BeautifulMentionsPluginProps) {
   }
 
   return (
-    <LexicalTypeaheadMenuPlugin<MenuOption>
-      commandPriority={COMMAND_PRIORITY_NORMAL}
-      onQueryChange={setQueryString}
-      onSelectOption={handleSelectMenuItem}
-      triggerFn={checkForMentionMatch}
-      options={options}
-      anchorClassName={menuAnchorClassName}
-      onClose={handleClose}
-      menuRenderFn={(
-        anchorElementRef,
-        { selectedIndex, selectOptionAndCleanUp, setHighlightedIndex },
-      ) => {
-        selectedMenuIndexRef.current = selectedIndex;
-        if (
-          anchorElementRef.current &&
-          options.length === 0 &&
-          query &&
-          !loading &&
-          isEditorFocused &&
-          EmptyComponent
-        ) {
-          return ReactDOM.createPortal(
-            <EmptyComponent />,
-            anchorElementRef.current,
-          );
-        }
-        return anchorElementRef.current && open
-          ? ReactDOM.createPortal(
-              <MenuComponent
-                loading={loading}
-                role="menu"
-                aria-label="Choose a mention"
-                aria-hidden={!open}
-                aria-activedescendant={
-                  !IS_MOBILE &&
-                  selectedIndex !== null &&
-                  !!options[selectedIndex]
-                    ? options[selectedIndex].displayValue
-                    : ""
-                }
-              >
-                {options.map((option, i) => (
-                  <MenuItemComponent
-                    key={option.key}
-                    tabIndex={-1}
-                    selected={!IS_MOBILE && selectedIndex === i}
-                    ref={option.setRefElement}
-                    role="menuitem"
-                    aria-selected={!IS_MOBILE && selectedIndex === i}
-                    aria-label={`Choose ${option.value}`}
-                    item={option.menuItem}
-                    itemValue={option.value}
-                    label={option.displayValue}
-                    {...option.data}
-                    onClick={() => {
-                      setHighlightedIndex(i);
-                      selectOptionAndCleanUp(option);
-                    }}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                    }}
-                    onMouseEnter={() => {
-                      setHighlightedIndex(i);
-                    }}
-                  >
-                    {option.displayValue}
-                  </MenuItemComponent>
-                ))}
-              </MenuComponent>,
-              anchorElementRef.current,
-            )
-          : null;
-      }}
-    />
+    <>
+      <LexicalTypeaheadMenuPlugin<MenuOption>
+        commandPriority={COMMAND_PRIORITY_NORMAL}
+        onQueryChange={setQueryString}
+        onSelectOption={handleSelectMenuItem}
+        triggerFn={checkForMentionMatch}
+        options={options}
+        anchorClassName={menuAnchorClassName}
+        onClose={handleClose}
+        menuRenderFn={menuRenderFn}
+      />
+      {nodeKey &&  <LexicalNodeMenuPlugin options={options} menuRenderFn={menuRenderFn} onSelectOption={handleSelectMenuItem} nodeKey={nodeKey}/>}
+    </>
   );
 }
