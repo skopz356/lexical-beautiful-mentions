@@ -1,14 +1,10 @@
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import { LexicalNodeMenuPlugin } from "@lexical/react/LexicalNodeMenuPlugin";
 import {
   LexicalTypeaheadMenuPlugin,
-  MenuResolution,
   MenuTextMatch,
 } from "@lexical/react/LexicalTypeaheadMenuPlugin";
-import {
-  LexicalMenu,
-  MenuRenderFn,
-  useMenuAnchorRef,
-} from "@lexical/react/shared/LexicalMenu";
+import { MenuRenderFn } from "@lexical/react/shared/LexicalMenu";
 import { mergeRegister } from "@lexical/utils";
 import {
   $createTextNode,
@@ -68,7 +64,6 @@ import {
 } from "./mention-utils";
 import { useIsFocused } from "./useIsFocused";
 import { useMentionLookupService } from "./useMentionLookupService";
-import { LexicalNodeMenuPlugin } from "@lexical/react/LexicalNodeMenuPlugin";
 
 class MentionOption extends MenuOption {
   readonly menuItem: BeautifulMentionsMenuItem;
@@ -183,6 +178,8 @@ export function BeautifulMentionsPlugin(props: BeautifulMentionsPluginProps) {
   const [editor] = useLexicalComposerContext();
   const [queryString, setQueryString] = useState<string | null>(null);
   const [trigger, setTrigger] = useState<string | null>(null);
+  const [selectedBeautifulMentionNode, setSelectedBeautifulMentionNode] =
+    useState<BeautifulMentionNode | null>(null);
   const { results, loading, query } = useMentionLookupService({
     queryString,
     searchDelay,
@@ -257,6 +254,32 @@ export function BeautifulMentionsPlugin(props: BeautifulMentionsPluginProps) {
     showCurrentMentionsAsSuggestions,
   ]);
 
+  const optionsForEditation = useMemo(() => {
+    const selectedOption = options.find(
+      (option) => option.value === selectedBeautifulMentionNode?.__value,
+    );
+    if (selectedOption) {
+      return [
+        ...options.filter((option) => option != selectedOption),
+        selectedOption,
+      ];
+    }
+    return options;
+  }, [options, selectedBeautifulMentionNode]);
+
+  const restoreSelection = useCallback(() => {
+    const selection = $getSelection();
+    if ((!selection || $isNodeSelection(selection)) && oldSelection.current) {
+      const newSelection = oldSelection.current.clone();
+      $setSelection(newSelection);
+    } else if (!selection) {
+      $selectEnd();
+    }
+    if (oldSelection.current) {
+      oldSelection.current = null;
+    }
+  }, []);
+
   const open = !!options.length || loading;
 
   const handleClose = useCallback(() => {
@@ -266,7 +289,7 @@ export function BeautifulMentionsPlugin(props: BeautifulMentionsPluginProps) {
   const handleSelectOption = useCallback(
     (
       selectedOption: MenuOption,
-      nodeToReplace: TextNode | null,
+      nodeToReplace: TextNode | BeautifulMentionNode | null,
       closeMenu?: () => void,
     ) => {
       editor.update(() => {
@@ -310,7 +333,7 @@ export function BeautifulMentionsPlugin(props: BeautifulMentionsPluginProps) {
   const handleSelectMenuItem = useCallback(
     (
       selectedOption: MenuOption,
-      nodeToReplace: TextNode | null,
+      nodeToReplace: TextNode | BeautifulMentionNode | null,
       closeMenu?: () => void,
     ) => {
       if (!trigger) {
@@ -326,6 +349,34 @@ export function BeautifulMentionsPlugin(props: BeautifulMentionsPluginProps) {
     },
     [handleSelectOption, onMenuItemSelect, trigger],
   );
+
+  const handleSelectMenuItemAsEdit = useCallback(
+    (
+      selectedOption: MenuOption,
+      _nodeToReplace: TextNode | null,
+      closeMenu?: () => void,
+    ) => {
+      if (!trigger) {
+        return;
+      }
+      handleSelectMenuItem(
+        selectedOption,
+        selectedBeautifulMentionNode,
+        closeMenu,
+      );
+      restoreSelection();
+    },
+    [
+      trigger,
+      selectedBeautifulMentionNode,
+      handleSelectMenuItem,
+      restoreSelection,
+    ],
+  );
+  const handleCloseEdit = useCallback(() => {
+    setTrigger(null);
+    setSelectedBeautifulMentionNode(null);
+  }, []);
 
   const checkForMentionMatch = useCallback(
     (text: string) => {
@@ -416,19 +467,6 @@ export function BeautifulMentionsPlugin(props: BeautifulMentionsPluginProps) {
     triggers,
     allowSpaces,
   ]);
-
-  const restoreSelection = useCallback(() => {
-    const selection = $getSelection();
-    if ((!selection || $isNodeSelection(selection)) && oldSelection.current) {
-      const newSelection = oldSelection.current.clone();
-      $setSelection(newSelection);
-    } else if (!selection) {
-      $selectEnd();
-    }
-    if (oldSelection.current) {
-      oldSelection.current = null;
-    }
-  }, []);
 
   const handleDeleteMention = useCallback(
     (event: KeyboardEvent) => {
@@ -585,11 +623,9 @@ export function BeautifulMentionsPlugin(props: BeautifulMentionsPluginProps) {
     [insertSpaceIfNecessary, triggers, punctuation],
   );
 
-  const [nodeKey, setNodeKey] = useState<string | null>(null)
-
-  const menuRenderFn: MenuRenderFn<MenuOption> = (
+  const menuRenderFn: MenuRenderFn<MentionOption> = (
     anchorElementRef,
-    { selectedIndex, selectOptionAndCleanUp, setHighlightedIndex },
+    { selectedIndex, selectOptionAndCleanUp, setHighlightedIndex, options },
   ) => {
     selectedMenuIndexRef.current = selectedIndex;
     if (
@@ -658,18 +694,21 @@ export function BeautifulMentionsPlugin(props: BeautifulMentionsPluginProps) {
       );
     }
     return mergeRegister(
-        editor.registerCommand(
-            SELECTION_CHANGE_COMMAND,
-            () => {
-              const selection = $getSelection()?.getNodes();
-              if(selection && $isBeautifulMentionNode(selection[0])) {
-                setNodeKey(selection[0].getKey())
-              }
+      editor.registerCommand(
+        SELECTION_CHANGE_COMMAND,
+        () => {
+          const selection = $getSelection()?.getNodes();
+          if (selection && $isBeautifulMentionNode(selection[0])) {
+            setSelectedBeautifulMentionNode(selection[0]);
+            setTrigger(selection[0].getTrigger());
+          } else {
+            setSelectedBeautifulMentionNode(null);
+          }
 
-              return false;
-            },
-            COMMAND_PRIORITY_NORMAL
-        ),
+          return false;
+        },
+        COMMAND_PRIORITY_NORMAL,
+      ),
       editor.registerCommand(
         SELECTION_CHANGE_COMMAND,
         () => {
@@ -819,7 +858,7 @@ export function BeautifulMentionsPlugin(props: BeautifulMentionsPluginProps) {
 
   return (
     <>
-      <LexicalTypeaheadMenuPlugin<MenuOption>
+      <LexicalTypeaheadMenuPlugin<MentionOption>
         commandPriority={COMMAND_PRIORITY_NORMAL}
         onQueryChange={setQueryString}
         onSelectOption={handleSelectMenuItem}
@@ -829,7 +868,16 @@ export function BeautifulMentionsPlugin(props: BeautifulMentionsPluginProps) {
         onClose={handleClose}
         menuRenderFn={menuRenderFn}
       />
-      {nodeKey &&  <LexicalNodeMenuPlugin options={options} menuRenderFn={menuRenderFn} onSelectOption={handleSelectMenuItem} nodeKey={nodeKey}/>}
+      {selectedBeautifulMentionNode && (
+        <LexicalNodeMenuPlugin<MentionOption>
+          key={selectedBeautifulMentionNode.getKey()}
+          options={optionsForEditation}
+          menuRenderFn={menuRenderFn}
+          onSelectOption={handleSelectMenuItemAsEdit}
+          onClose={handleCloseEdit}
+          nodeKey={selectedBeautifulMentionNode.getKey()}
+        />
+      )}
     </>
   );
 }
